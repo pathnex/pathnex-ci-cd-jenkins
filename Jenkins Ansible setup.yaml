@@ -1,0 +1,179 @@
+---
+- name: Fully automate Jenkins setup on Amazon Linux 2
+  hosts: jenkins
+  become: yes
+
+  vars:
+    jenkins_port: 8080
+    jenkins_admin_user: admin
+    jenkins_admin_password: Admin@123
+
+  tasks:
+
+    - name: Update packages
+      yum:
+        name: "*"
+        state: latest
+
+    - name: Install Java 21 (Amazon Corretto)
+      yum:
+        name: java-21-amazon-corretto
+        state: present
+
+    - name: Install Git
+      yum:
+        name: git
+        state: present
+
+    - name: Verify Git installation
+      command: git --version
+      register: git_version
+      changed_when: false
+
+    - name: Show Git version
+      debug:
+        msg: "{{ git_version.stdout }}"
+
+    - name: Install Maven
+      yum:
+        name: maven
+        state: present
+
+
+    - name: Verify Maven installation
+      command: mvn -version
+      register: mvn_version
+      changed_when: false
+    
+    - name: Show Maven version
+      debug:
+        msg: "{{ mvn_version.stdout }}"
+        
+    
+    - name: Install Docker
+      yum:
+        name: docker
+        state: present
+    
+    - name: Start and enable Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+    
+    # 🔥 CRITICAL FIX: create docker group (safe if already exists)
+    - name: Ensure docker group exists
+      group:
+        name: docker
+        state: present
+    
+    # 🔥 CRITICAL FIX: add jenkins user to docker group
+    - name: Add Jenkins user to docker group
+      user:
+        name: jenkins
+        groups: docker
+        append: yes
+    
+    # 🔥 ensure socket permissions are correct
+    - name: Set correct permissions for docker socket (safe)
+      file:
+        path: /var/run/docker.sock
+        mode: '0660'
+    
+    # 🔥 restart services so group changes take effect
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+    
+    - name: Restart Jenkins
+      systemd:
+        name: jenkins
+        state: restarted
+    
+    # 🔍 verification
+    - name: Verify Docker access
+      command: docker ps
+      become_user: jenkins
+      register: docker_check
+      changed_when: false
+    
+    - debug:
+        msg: "Docker is working for Jenkins user"
+        
+
+    - name: Add Jenkins repo
+      get_url:
+        url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
+        dest: /etc/yum.repos.d/jenkins.repo
+
+    - name: Import Jenkins GPG key
+      rpm_key:
+        key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+        state: present
+
+    - name: Install Jenkins
+      yum:
+        name: jenkins
+        state: present
+
+    - name: Disable Jenkins setup wizard
+      lineinfile:
+        path: /etc/sysconfig/jenkins
+        regexp: '^JENKINS_JAVA_OPTIONS='
+        line: 'JENKINS_JAVA_OPTIONS="-Djenkins.install.runSetupWizard=false"'
+        create: yes
+
+    - name: Create init.groovy.d directory
+      file:
+        path: /var/lib/jenkins/init.groovy.d
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0755'
+
+    - name: Create admin user via Groovy script
+      copy:
+        dest: /var/lib/jenkins/init.groovy.d/basic-security.groovy
+        owner: jenkins
+        group: jenkins
+        mode: '0644'
+        content: |
+          #!groovy
+          import jenkins.model.*
+          import hudson.security.*
+
+          def instance = Jenkins.getInstance()
+
+          def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+          hudsonRealm.createAccount("{{ jenkins_admin_user }}", "{{ jenkins_admin_password }}")
+          instance.setSecurityRealm(hudsonRealm)
+
+          def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+          strategy.setAllowAnonymousRead(false)
+          instance.setAuthorizationStrategy(strategy)
+
+          instance.save()
+
+    - name: Reload systemd
+      command: systemctl daemon-reexec
+
+    - name: Start and enable Jenkins
+      systemd:
+        name: jenkins
+        enabled: yes
+        state: started
+
+    - name: Wait for Jenkins to start
+      wait_for:
+        port: "{{ jenkins_port }}"
+        delay: 15
+        timeout: 180
+
+    - name: Show Jenkins URL
+      debug:
+        msg: "Jenkins is ready at http://{{ hostvars[inventory_hostname]['ansible_host'] }}:{{ jenkins_port }}"
+
+    - name: Show login credentials
+      debug:
+        msg: "Username: {{ jenkins_admin_user }} | Password: {{ jenkins_admin_password }}"

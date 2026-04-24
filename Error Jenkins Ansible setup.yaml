@@ -1,0 +1,102 @@
+---
+- name: Fully automate Jenkins setup on Amazon Linux 2
+  hosts: all
+  become: yes
+
+  vars:
+    jenkins_port: 8080
+    ansible_user: ec2-user
+    ansible_host: 3.110.157.105
+    ansible_ssh_private_key_file: Pathnex-ec2-key.pem
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+
+    jenkins_admin_user: admin
+    jenkins_admin_password: Admin@123
+
+  tasks:
+
+    - name: Update packages
+      yum:
+        name: "*"
+        state: latest
+
+    - name: Install Java 17 (Amazon Corretto)
+      yum:
+        name: java-17-amazon-corretto
+        state: present
+
+    - name: Add Jenkins repo
+      get_url:
+        url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
+        dest: /etc/yum.repos.d/jenkins.repo
+
+    - name: Import Jenkins GPG key
+      rpm_key:
+        key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+        state: present
+
+    - name: Install Jenkins
+      yum:
+        name: jenkins
+        state: present
+
+    - name: Disable Jenkins setup wizard
+      lineinfile:
+        path: /etc/sysconfig/jenkins
+        regexp: '^JENKINS_JAVA_OPTIONS='
+        line: 'JENKINS_JAVA_OPTIONS="-Djenkins.install.runSetupWizard=false"'
+        create: yes
+
+    - name: Create init.groovy.d directory
+      file:
+        path: /var/lib/jenkins/init.groovy.d
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0755'
+
+    - name: Create admin user via Groovy script
+      copy:
+        dest: /var/lib/jenkins/init.groovy.d/basic-security.groovy
+        owner: jenkins
+        group: jenkins
+        mode: '0644'
+        content: |
+          #!groovy
+          import jenkins.model.*
+          import hudson.security.*
+
+          def instance = Jenkins.getInstance()
+
+          def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+          hudsonRealm.createAccount("{{ jenkins_admin_user }}", "{{ jenkins_admin_password }}")
+          instance.setSecurityRealm(hudsonRealm)
+
+          def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+          strategy.setAllowAnonymousRead(false)
+          instance.setAuthorizationStrategy(strategy)
+
+          instance.save()
+
+    - name: Reload systemd
+      command: systemctl daemon-reexec
+
+    - name: Start and enable Jenkins
+      systemd:
+        name: jenkins
+        enabled: yes
+        state: started
+
+    - name: Wait for Jenkins to start
+      wait_for:
+        port: "{{ jenkins_port }}"
+        delay: 15
+        timeout: 180
+
+    - name: Show Jenkins URL
+      debug:
+        msg: "Jenkins is ready at http://{{ ansible_host }}:{{ jenkins_port }}"
+
+    - name: Show login credentials
+      debug:
+        msg: "Username: {{ jenkins_admin_user }} | Password: {{ jenkins_admin_password }}"
