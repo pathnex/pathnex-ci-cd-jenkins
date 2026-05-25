@@ -6,11 +6,13 @@ pipeline {
     }
 
     environment {
-        APP_NAME = "pathnex-application"
-        IMAGE_TAG = "${BUILD_NUMBER}"
-        FULL_IMAGE = "${APP_NAME}:${BUILD_NUMBER}"
+    MAVEN_HOME = "/opt/maven"
+    PATH = "/opt/maven/bin:${env.PATH}"
+    APP_NAME = "pathnex-application"
+    IMAGE_TAG = "${BUILD_NUMBER}"
+    FULL_IMAGE = "${APP_NAME}:${BUILD_NUMBER}"
     }
-
+    
     stages {
 
         stage('0. Clean') {

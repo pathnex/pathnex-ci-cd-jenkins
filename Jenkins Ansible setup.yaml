@@ -15,10 +15,45 @@
         name: "*"
         state: latest
 
-    - name: Install Java 21 (Amazon Corretto)
+    - name: Download Amazon Corretto 21 RPM
+      get_url:
+        url: https://corretto.aws/downloads/latest/amazon-corretto-21-x64-linux-jdk.rpm
+        dest: /tmp/amazon-corretto-21.rpm
+        mode: '0644'
+
+    - name: Install Amazon Corretto 21
       yum:
-        name: java-21-amazon-corretto
+        name: /tmp/amazon-corretto-21.rpm
         state: present
+
+    - name: Set Java 21 as default
+      alternatives:
+        name: java
+        path: /usr/lib/jvm/java-21-amazon-corretto/bin/java
+
+    - name: Set Javac 21 as default
+      alternatives:
+        name: javac
+        path: /usr/lib/jvm/java-21-amazon-corretto/bin/javac    
+
+    - name: Set global JAVA_HOME
+      copy:
+         dest: /etc/profile.d/java.sh
+         mode: '0755'
+         content: |
+           export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
+           export PATH=$JAVA_HOME/bin:$PATH
+
+    - name: Verify active Java version
+      command: java -version
+      register: java_version
+      changed_when: false
+
+    - name: Show active Java version
+      debug:
+        msg: "{{ java_version.stderr }}"
+
+
 
     - name: Install Git
       yum:
@@ -34,10 +69,36 @@
       debug:
         msg: "{{ git_version.stdout }}"
 
-    - name: Install Maven
-      yum:
-        name: maven
-        state: present
+    - name: Download Maven 3.9.6
+      get_url:
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz
+        dest: /tmp/apache-maven-3.9.6-bin.tar.gz
+    
+    - name: Extract Maven
+      unarchive:
+        src: /tmp/apache-maven-3.9.6-bin.tar.gz
+        dest: /opt/
+        remote_src: yes
+    
+    - name: Create Maven Symlink
+      file:
+        src: /opt/apache-maven-3.9.6
+        dest: /opt/maven
+        state: link
+    
+    - name: Configure Maven Environment
+      copy:
+        dest: /etc/profile.d/maven.sh
+        content: |
+          export MAVEN_HOME=/opt/maven
+          export PATH=$MAVEN_HOME/bin:$PATH
+        mode: '0755'
+    
+    - name: Set Maven for Current Session
+      shell: |
+        export MAVEN_HOME=/opt/maven
+        export PATH=$MAVEN_HOME/bin:$PATH
+        mvn -version
 
 
     - name: Verify Maven installation
@@ -86,11 +147,6 @@
         name: docker
         state: restarted
     
-    - name: Restart Jenkins
-      systemd:
-        name: jenkins
-        state: restarted
-    
     # 🔍 verification
     - name: Verify Docker access
       command: docker ps
@@ -117,11 +173,25 @@
         name: jenkins
         state: present
 
-    - name: Disable Jenkins setup wizard
+    - name: Configure Jenkins Java options
       lineinfile:
         path: /etc/sysconfig/jenkins
         regexp: '^JENKINS_JAVA_OPTIONS='
         line: 'JENKINS_JAVA_OPTIONS="-Djenkins.install.runSetupWizard=false"'
+        create: yes
+    
+    - name: Set Jenkins JAVA_HOME
+      lineinfile:
+        path: /etc/sysconfig/jenkins
+        regexp: '^JAVA_HOME='
+        line: 'JAVA_HOME="/usr/lib/jvm/java-21-amazon-corretto"'
+        create: yes
+    
+    - name: Set Jenkins Java command
+      lineinfile:
+        path: /etc/sysconfig/jenkins
+        regexp: '^JENKINS_JAVA_CMD='
+        line: 'JENKINS_JAVA_CMD="/usr/lib/jvm/java-21-amazon-corretto/bin/java"'
         create: yes
 
     - name: Create init.groovy.d directory
@@ -156,13 +226,26 @@
           instance.save()
 
     - name: Reload systemd
-      command: systemctl daemon-reexec
+      systemd:
+        daemon_reload: yes
+
+    - name: Check JAVA_HOME
+      shell: echo $JAVA_HOME
+      register: java_home_check
+
+    - debug:
+        msg: "{{ java_home_check.stdout }}"
 
     - name: Start and enable Jenkins
       systemd:
         name: jenkins
         enabled: yes
         state: started
+
+    - name: Restart Jenkins
+      systemd:
+        name: jenkins
+        state: restarted
 
     - name: Wait for Jenkins to start
       wait_for:

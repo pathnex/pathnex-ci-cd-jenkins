@@ -25,14 +25,10 @@ resource "aws_instance" "pathnex" {
   delete_on_termination = true
 }
   tags = {
-    Name = "pathnex-ec2-1"
+    Name = "pathnex-ec2"
   }
 }
 
 output "ec2_public_ips" {
   value = aws_instance.pathnex[*].public_ip
 }
-
-
-
-#13.235.23.142
