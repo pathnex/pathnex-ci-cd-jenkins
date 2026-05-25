@@ -1,0 +1,41 @@
+jenkins:
+  systemMessage: "Auto-configured Jenkins (Ansible + JCasC)"
+  numExecutors: 2
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "Admin@123"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              scope: GLOBAL
+              id: "sonarqube-token"
+              secret: "REPLACE_WITH_SONAR_TOKEN"
+              description: "Sonar Token"
+
+unclassified:
+  sonarGlobalConfiguration:
+    installations:
+      - name: "sonarqube-server"
+        serverUrl: "http://localhost:9000"
+        serverAuthenticationToken: "sonarqube-token"
+
+tool:
+  sonarRunnerInstallation:
+    installations:
+      - name: "SonarQubeScanner"
+        properties:
+          - installSource:
+              installers:
+                - sonarRunnerInstaller:
+                    id: "latest"

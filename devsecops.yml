@@ -1,0 +1,85 @@
+---
+- name: Fully automated DevSecOps Setup (Jenkins + SonarQube + Trivy)
+  hosts: jenkins
+  become: yes
+
+  vars:
+    jenkins_port: 8080
+    sonarqube_port: 9000
+    jenkins_admin_user: admin
+    jenkins_admin_password: Admin@123
+    ansible_python_interpreter: /usr/bin/python3
+
+
+
+  tasks:
+    - name: Install python3-pip
+      dnf:
+        name: python3-pip
+        state: present
+
+    - name: Install Docker SDK for Python
+      pip:
+        name: docker
+        executable: pip3
+
+    - name: Start Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+
+    - name: Run SonarQube container
+      docker_container:
+        name: sonarqube
+        image: sonarqube:community
+        state: started
+        restart_policy: always
+        ports:
+          - "{{ sonarqube_port }}:9000"
+        env:
+          SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+        volumes:
+          - /opt/sonarqube/data:/opt/sonarqube/data
+          - /opt/sonarqube/logs:/opt/sonarqube/logs
+          - /opt/sonarqube/extensions:/opt/sonarqube/extensions
+
+    - name: Wait for SonarQube
+      wait_for:
+        port: "{{ sonarqube_port }}"
+        delay: 20
+        timeout: 300
+
+    # ---------------- OUTPUT ----------------
+    - debug:
+        msg: 
+          - ======================================
+          - 🚀 DEVSECOPS STACK READY
+          - ======================================
+          -  "Jenkins   : http://{{ hostvars[inventory_hostname]['ansible_host'] }}:8080"
+          -  "SonarQube : http://{{ hostvars[inventory_hostname]['ansible_host'] }}:9000"
+          - ======================================
+
+
+    - name: Display Jenkins and SonarQube credentials (CLI output)
+      debug:
+        msg:
+          - "======================================"
+          - "🚀 DEVSECOPS STACK READY"
+          - "======================================"
+          - "🔹 Jenkins"
+          - "URL  : http://{{ hostvars[inventory_hostname]['ansible_host'] }}:8080"
+          - "User : {{ jenkins_admin_user }}"
+          - "Pass : {{ jenkins_admin_password }}"
+          - "--------------------------------------"
+          - "🔹 SonarQube"
+          - "URL  : http://{{ hostvars[inventory_hostname]['ansible_host'] }}:9000"
+          - "User : admin"
+          - "Pass : admin"
+          - "======================================"
+
+
+
+
+          # squ_b102e3b0a50b1c1ea0ce82393205805b8aeb3f9a

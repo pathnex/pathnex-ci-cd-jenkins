@@ -1,0 +1,70 @@
+pipeline {
+    agent any
+
+    environment {
+        APP_NAME = "pathnex-app"
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        FULL_IMAGE = "${APP_NAME}:${BUILD_NUMBER}"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/spring-projects/spring-petclinic.git'
+            }
+        }
+
+        stage('Build & Test') {
+            steps {
+                sh 'mvn clean verify'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            environment {
+                SCANNER_HOME = tool 'SonarQubeScanner'
+            }
+            steps {
+                withSonarQubeEnv('sonarqube-server') {
+                    sh """
+                    ${SCANNER_HOME}/bin/sonar-scanner \
+                    -Dsonar.projectKey=petclinic \
+                    -Dsonar.sources=. \
+                    -Dsonar.java.binaries=target
+                    """
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 2, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t ${FULL_IMAGE} .'
+            }
+        }
+
+        stage('Trivy Scan') {
+            steps {
+                sh 'trivy image --exit-code 1 --severity CRITICAL ${FULL_IMAGE}'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh '''
+                docker stop ${APP_NAME} || true
+                docker rm ${APP_NAME} || true
+                docker run -d -p 8080:8080 --name ${APP_NAME} ${FULL_IMAGE}
+                '''
+            }
+        }
+    }
+}
