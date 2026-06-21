@@ -1,0 +1,172 @@
+---
+- name: Fully working Jenkins setup on Amazon Linux 2 (Java 21)
+  hosts: jenkins
+  become: yes
+
+  vars:
+    jenkins_port: 8080
+    java_home: /usr/lib/jvm/java-21-amazon-corretto
+    java_bin: /usr/lib/jvm/java-21-amazon-corretto/bin/java
+
+  tasks:
+
+  # ---------------------------------------------------
+  # SYSTEM UPDATE
+  # ---------------------------------------------------
+  - name: Update all packages
+    yum:
+      name: "*"
+      state: latest
+
+  # ---------------------------------------------------
+  # JAVA 21 INSTALL (CORRETTO)
+  # ---------------------------------------------------
+  - name: Import Corretto GPG key
+    rpm_key:
+      key: https://yum.corretto.aws/corretto.key
+      state: present
+
+  - name: Add Corretto repo
+    get_url:
+      url: https://yum.corretto.aws/corretto.repo
+      dest: /etc/yum.repos.d/corretto.repo
+
+  - name: Install Java 21
+    yum:
+      name: java-21-amazon-corretto-devel
+      state: present
+
+  - name: Verify Java
+    command: "{{ java_bin }} -version"
+    register: java_version
+    changed_when: false
+
+  - debug:
+      msg: "{{ java_version.stderr }}"
+
+  # ---------------------------------------------------
+  # GIT
+  # ---------------------------------------------------
+  - name: Install Git
+    yum:
+      name: git
+      state: present
+
+  # ---------------------------------------------------
+  # DOCKER
+  # ---------------------------------------------------
+  - name: Install Docker
+    yum:
+      name: docker
+      state: present
+
+  - name: Start Docker
+    systemd:
+      name: docker
+      state: started
+      enabled: yes
+
+  - name: Add Jenkins user to docker group
+    user:
+      name: jenkins
+      groups: docker
+      append: yes
+    ignore_errors: yes
+
+  # ---------------------------------------------------
+  # MAVEN
+  # ---------------------------------------------------
+  - name: Download Maven
+    get_url:
+      url: https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz
+      dest: /tmp/maven.tar.gz
+
+  - name: Extract Maven
+    unarchive:
+      src: /tmp/maven.tar.gz
+      dest: /opt/
+      remote_src: yes
+
+  - name: Create Maven symlink
+    file:
+      src: /opt/apache-maven-3.9.6
+      dest: /opt/maven
+      state: link
+
+  - name: Configure Maven env
+    copy:
+      dest: /etc/profile.d/maven.sh
+      mode: '0755'
+      content: |
+        export MAVEN_HOME=/opt/maven
+        export PATH=$MAVEN_HOME/bin:$PATH
+
+  # ---------------------------------------------------
+  # JENKINS INSTALL
+  # ---------------------------------------------------
+  - name: Add Jenkins repo
+    get_url:
+      url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
+      dest: /etc/yum.repos.d/jenkins.repo
+
+  - name: Import Jenkins key
+    rpm_key:
+      key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+      state: present
+
+  - name: Install Jenkins
+    yum:
+      name: jenkins
+      state: present
+
+  # ---------------------------------------------------
+  # CRITICAL FIX: SYSTEMD JAVA OVERRIDE
+  # ---------------------------------------------------
+  - name: Create systemd override directory
+    file:
+      path: /etc/systemd/system/jenkins.service.d
+      state: directory
+
+  - name: Set Jenkins JAVA_HOME and Java binary
+    copy:
+      dest: /etc/systemd/system/jenkins.service.d/override.conf
+      mode: '0644'
+      content: |
+        [Service]
+        Environment="JAVA_HOME={{ java_home }}"
+        Environment="JENKINS_JAVA_CMD={{ java_bin }}"
+
+  - name: Reload systemd daemon
+    systemd:
+      daemon_reload: yes
+
+  # ---------------------------------------------------
+  # START JENKINS
+  # ---------------------------------------------------
+  - name: Enable Jenkins
+    systemd:
+      name: jenkins
+      enabled: yes
+
+  - name: Restart Jenkins
+    systemd:
+      name: jenkins
+      state: restarted
+
+  - name: Wait for Jenkins
+    wait_for:
+      port: "{{ jenkins_port }}"
+      delay: 10
+      timeout: 300
+
+  # ---------------------------------------------------
+  # OUTPUT
+  # ---------------------------------------------------
+  - name: Show Jenkins URL
+    debug:
+      msg: "Jenkins running at http://{{ ansible_host }}:{{ jenkins_port }}"
+
+
+  - name: Show login credentials
+    debug:
+      msg: "Username: {{ jenkins_admin_user }} | Password: {{ jenkins_admin_password }}"
