@@ -7,6 +7,3 @@ terraform {
     encrypt        = true
   }
 }
-
-
-# If you are using local backend you can comment above code.

@@ -1,200 +1,182 @@
 ---
-- name: Fully automate Jenkins setup on Amazon Linux 2
+- name: Install and Configure Jenkins on Amazon Linux 2
   hosts: jenkins
-  become: yes
+  become: true
 
   vars:
     jenkins_port: 8080
     jenkins_admin_user: admin
     jenkins_admin_password: Admin@123
+    java_home: /usr/lib/jvm/java-21-amazon-corretto
 
   tasks:
 
-    - name: Update packages
+    ####################################################################
+    # Update OS
+    ####################################################################
+
+    - name: Update all packages
       yum:
         name: "*"
         state: latest
 
-    - name: Download Amazon Corretto 21 RPM
+    ####################################################################
+    # Java 21
+    ####################################################################
+
+    - name: Download Amazon Corretto 21
       get_url:
         url: https://corretto.aws/downloads/latest/amazon-corretto-21-x64-linux-jdk.rpm
-        dest: /tmp/amazon-corretto-21.rpm
-        mode: '0644'
+        dest: /tmp/corretto21.rpm
 
-    - name: Install Amazon Corretto 21
+    - name: Install Corretto 21
       yum:
-        name: /tmp/amazon-corretto-21.rpm
+        name: /tmp/corretto21.rpm
         state: present
 
-    - name: Set Java 21 as default
+    - name: Set Java alternative
       alternatives:
         name: java
-        path: /usr/lib/jvm/java-21-amazon-corretto/bin/java
+        path: "{{ java_home }}/bin/java"
 
-    - name: Set Javac 21 as default
+    - name: Set Javac alternative
       alternatives:
         name: javac
-        path: /usr/lib/jvm/java-21-amazon-corretto/bin/javac    
+        path: "{{ java_home }}/bin/javac"
 
-    - name: Set global JAVA_HOME
+    - name: Configure JAVA_HOME
       copy:
-         dest: /etc/profile.d/java.sh
-         mode: '0755'
-         content: |
-           export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
-           export PATH=$JAVA_HOME/bin:$PATH
+        dest: /etc/profile.d/java.sh
+        mode: '0755'
+        content: |
+          export JAVA_HOME={{ java_home }}
+          export PATH=$JAVA_HOME/bin:$PATH
 
-    - name: Verify active Java version
-      command: java -version
-      register: java_version
-      changed_when: false
+    ####################################################################
+    # Required packages
+    ####################################################################
 
-    - name: Show active Java version
-      debug:
-        msg: "{{ java_version.stderr }}"
-
-
-
-    - name: Install Git
+    - name: Install packages
       yum:
-        name: git
+        name:
+          - git
+          - wget
+          - curl
+          - unzip
+          - fontconfig
         state: present
 
-    - name: Verify Git installation
-      command: git --version
-      register: git_version
-      changed_when: false
+    ####################################################################
+    # Maven
+    ####################################################################
 
-    - name: Show Git version
-      debug:
-        msg: "{{ git_version.stdout }}"
+    - name: Check Maven
+      stat:
+        path: /opt/maven/bin/mvn
+      register: maven_exists
 
-    - name: Download Maven 3.9.6
+    - name: Download Maven
       get_url:
         url: https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz
-        dest: /tmp/apache-maven-3.9.6-bin.tar.gz
-    
+        dest: /tmp/maven.tar.gz
+      when: not maven_exists.stat.exists
+
     - name: Extract Maven
       unarchive:
-        src: /tmp/apache-maven-3.9.6-bin.tar.gz
-        dest: /opt/
+        src: /tmp/maven.tar.gz
+        dest: /opt
         remote_src: yes
-    
-    - name: Create Maven Symlink
+      when: not maven_exists.stat.exists
+
+    - name: Create Maven symlink
       file:
         src: /opt/apache-maven-3.9.6
         dest: /opt/maven
         state: link
-    
-    - name: Configure Maven Environment
+
+    - name: Configure Maven
       copy:
         dest: /etc/profile.d/maven.sh
+        mode: '0755'
         content: |
           export MAVEN_HOME=/opt/maven
           export PATH=$MAVEN_HOME/bin:$PATH
-        mode: '0755'
-    
-    - name: Set Maven for Current Session
-      shell: |
-        export MAVEN_HOME=/opt/maven
-        export PATH=$MAVEN_HOME/bin:$PATH
-        mvn -version
 
+    ####################################################################
+    # Docker
+    ####################################################################
 
-    - name: Verify Maven installation
-      command: mvn -version
-      register: mvn_version
-      changed_when: false
-    
-    - name: Show Maven version
-      debug:
-        msg: "{{ mvn_version.stdout }}"
-        
-    
     - name: Install Docker
       yum:
         name: docker
         state: present
-    
-    - name: Start and enable Docker service
-      systemd:
-        name: docker
-        state: started
-        enabled: yes
-    
-    # 🔥 CRITICAL FIX: create docker group (safe if already exists)
-    - name: Ensure docker group exists
-      group:
-        name: docker
-        state: present
-    
-    # 🔥 CRITICAL FIX: add jenkins user to docker group
-    - name: Add Jenkins user to docker group
-      user:
-        name: jenkins
-        groups: docker
-        append: yes
-    
-    # 🔥 ensure socket permissions are correct
-    - name: Set correct permissions for docker socket (safe)
-      file:
-        path: /var/run/docker.sock
-        mode: '0660'
-    
-    # 🔥 restart services so group changes take effect
-    - name: Restart Docker
-      systemd:
-        name: docker
-        state: restarted
-    
-    # 🔍 verification
-    - name: Verify Docker access
-      command: docker ps
-      become_user: jenkins
-      register: docker_check
-      changed_when: false
-    
-    - debug:
-        msg: "Docker is working for Jenkins user"
-        
 
-    - name: Add Jenkins repo
+    - name: Enable Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    ####################################################################
+    # Jenkins Repository
+    ####################################################################
+
+    - name: Download Jenkins repo
       get_url:
         url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
         dest: /etc/yum.repos.d/jenkins.repo
 
-    - name: Import Jenkins GPG key
+    - name: Import Jenkins key
       rpm_key:
-        key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
         state: present
+        key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+
+    ####################################################################
+    # Install Jenkins
+    ####################################################################
 
     - name: Install Jenkins
       yum:
         name: jenkins
         state: present
 
-    - name: Configure Jenkins Java options
-      lineinfile:
-        path: /etc/sysconfig/jenkins
-        regexp: '^JENKINS_JAVA_OPTIONS='
-        line: 'JENKINS_JAVA_OPTIONS="-Djenkins.install.runSetupWizard=false"'
-        create: yes
-    
-    - name: Set Jenkins JAVA_HOME
-      lineinfile:
-        path: /etc/sysconfig/jenkins
-        regexp: '^JAVA_HOME='
-        line: 'JAVA_HOME="/usr/lib/jvm/java-21-amazon-corretto"'
-        create: yes
-    
-    - name: Set Jenkins Java command
-      lineinfile:
-        path: /etc/sysconfig/jenkins
-        regexp: '^JENKINS_JAVA_CMD='
-        line: 'JENKINS_JAVA_CMD="/usr/lib/jvm/java-21-amazon-corretto/bin/java"'
-        create: yes
+    ####################################################################
+    # Docker Permissions
+    ####################################################################
 
-    - name: Create init.groovy.d directory
+    - name: Ensure docker group exists
+      group:
+        name: docker
+        state: present
+
+    - name: Add Jenkins user to docker group
+      user:
+        name: jenkins
+        groups: docker
+        append: yes
+
+    ####################################################################
+    # Disable setup wizard
+    ####################################################################
+
+    - name: Create override directory
+      file:
+        path: /etc/systemd/system/jenkins.service.d
+        state: directory
+
+    - name: Configure Jenkins JVM options
+      copy:
+        dest: /etc/systemd/system/jenkins.service.d/override.conf
+        content: |
+          [Service]
+          Environment="JAVA_HOME={{ java_home }}"
+          Environment="JENKINS_JAVA_OPTIONS=-Djenkins.install.runSetupWizard=false"
+
+    ####################################################################
+    # Create Admin User
+    ####################################################################
+
+    - name: Create init.groovy.d
       file:
         path: /var/lib/jenkins/init.groovy.d
         state: directory
@@ -202,22 +184,21 @@
         group: jenkins
         mode: '0755'
 
-    - name: Create admin user via Groovy script
+    - name: Create admin user
       copy:
         dest: /var/lib/jenkins/init.groovy.d/basic-security.groovy
         owner: jenkins
         group: jenkins
         mode: '0644'
         content: |
-          #!groovy
-          import jenkins.model.*
+          import jenkins.model.Jenkins
           import hudson.security.*
 
-          def instance = Jenkins.getInstance()
+          def instance = Jenkins.get()
 
-          def hudsonRealm = new HudsonPrivateSecurityRealm(false)
-          hudsonRealm.createAccount("{{ jenkins_admin_user }}", "{{ jenkins_admin_password }}")
-          instance.setSecurityRealm(hudsonRealm)
+          def realm = new HudsonPrivateSecurityRealm(false)
+          realm.createAccount("{{ jenkins_admin_user }}","{{ jenkins_admin_password }}")
+          instance.setSecurityRealm(realm)
 
           def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
           strategy.setAllowAnonymousRead(false)
@@ -225,38 +206,68 @@
 
           instance.save()
 
+    ####################################################################
+    # Start Jenkins
+    ####################################################################
+
     - name: Reload systemd
       systemd:
         daemon_reload: yes
 
-    - name: Check JAVA_HOME
-      shell: echo $JAVA_HOME
-      register: java_home_check
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
 
-    - debug:
-        msg: "{{ java_home_check.stdout }}"
-
-    - name: Start and enable Jenkins
+    - name: Enable Jenkins
       systemd:
         name: jenkins
         enabled: yes
-        state: started
-
-    - name: Restart Jenkins
-      systemd:
-        name: jenkins
         state: restarted
 
-    - name: Wait for Jenkins to start
+    - name: Wait for Jenkins
       wait_for:
         port: "{{ jenkins_port }}"
-        delay: 15
-        timeout: 180
+        delay: 20
+        timeout: 300
 
-    - name: Show Jenkins URL
-      debug:
-        msg: "Jenkins is ready at http://{{ hostvars[inventory_hostname]['ansible_host'] }}:{{ jenkins_port }}"
+    ####################################################################
+    # Verification
+    ####################################################################
 
-    - name: Show login credentials
+    - name: Verify Java
+      command: java -version
+      register: java_version
+      changed_when: false
+
+    - debug:
+        var: java_version.stderr_lines
+
+    - name: Verify Maven
+      command: /opt/maven/bin/mvn -version
+      register: maven_version
+      changed_when: false
+
+    - debug:
+        var: maven_version.stdout_lines
+
+    - name: Verify Git
+      command: git --version
+      register: git_version
+      changed_when: false
+
+    - debug:
+        var: git_version.stdout
+
+    - name: Verify Docker
+      command: docker ps
+      become_user: jenkins
+      changed_when: false
+
+    - name: Jenkins URL
       debug:
-        msg: "Username: {{ jenkins_admin_user }} | Password: {{ jenkins_admin_password }}"
+        msg: "http://{{ ansible_host }}:8080"
+
+    - name: Jenkins Credentials
+      debug:
+        msg: "Username={{ jenkins_admin_user }} Password={{ jenkins_admin_password }}"
